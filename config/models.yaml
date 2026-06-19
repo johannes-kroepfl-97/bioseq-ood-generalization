@@ -1,0 +1,111 @@
+# All encoder architectures in one place. One block per model:
+#   defaults      -> the model.* config used for a run (merged onto training.yaml)
+#   search_space  -> the architecture grid swept by the Phase B encoder search,
+#                    merged with the shared training search_space in training.yaml
+# The Phase B winner per (dataset, model) is written to tuned/models.yaml.
+
+cnn:
+  defaults:
+    normalization_strategy: null
+    channels: [32, 64, 128]
+    kernel_size: 5
+    fc_dim: 128
+    dropout_input: 0.0
+    dropout_hidden: 0.3
+  search_space:
+    channels: [[32, 64], [32, 64, 128], [64, 128]]
+    kernel_size: [3, 5, 7]
+    fc_dim: [64, 96, 128]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.2, 0.3, 0.5]
+
+mlp:
+  defaults:
+    normalization_strategy: null
+    hidden_dims: 256
+    num_layers: 3
+    dropout_input: 0.0
+    dropout_hidden: 0.3
+  search_space:
+    hidden_dims: [128, 256, 512]
+    num_layers: [2, 3, 4]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.2, 0.3, 0.5]
+
+lstm:
+  defaults:
+    normalization_strategy: null
+    hidden_dim: 64
+    num_layers: 2
+    fc_dim: 96
+    bidirectional: true
+    dropout_input: 0.2
+    dropout_hidden: 0.5
+  search_space:
+    hidden_dim: [32, 64, 128]
+    num_layers: [1, 2, 3]
+    fc_dim: [64, 96, 128]
+    bidirectional: [false, true]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.2, 0.3, 0.5]
+
+transformer:
+  defaults:
+    normalization_strategy: null
+    d_model: 64
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 256
+    pooling: last
+    dropout_input: 0.0
+    dropout_hidden: 0.2
+  search_space:
+    d_model: [32, 64, 128]
+    nhead: [2, 4, 8]
+    num_layers: [2, 3, 4]
+    dim_feedforward: [128, 256, 512]
+    pooling: [last, mean]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.1, 0.2, 0.3]
+
+cnn_lstm:
+  defaults:
+    normalization_strategy: null
+    cnn_channels: [64, 128]
+    kernel_size: 5
+    lstm_hidden_dim: 256
+    lstm_layers: 2
+    fc_dim: 96
+    bidirectional: false
+    dropout_input: 0.0
+    dropout_hidden: 0.3
+  search_space:
+    cnn_channels: [[32, 64], [64, 128], [32, 64, 128]]
+    kernel_size: [3, 5, 7]
+    lstm_hidden_dim: [64, 128, 256]
+    lstm_layers: [1, 2, 3]
+    fc_dim: [64, 96, 128]
+    bidirectional: [false, true]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.2, 0.3, 0.5]
+
+lstm_cnn:
+  defaults:
+    normalization_strategy: null
+    lstm_hidden_dim: 32
+    lstm_layers: 2
+    cnn_channels: [32, 64, 128]
+    kernel_size: 7
+    fc_dim: 96
+    bidirectional: false
+    dropout_input: 0.0
+    dropout_hidden: 0.3
+  search_space:
+    lstm_hidden_dim: [32, 64, 128]
+    lstm_layers: [1, 2, 3]
+    cnn_channels: [[32, 64], [64, 128], [32, 64, 128]]
+    kernel_size: [3, 5, 7]
+    fc_dim: [64, 96, 128]
+    bidirectional: [false, true]
+    dropout_input: [0.0, 0.1, 0.2]
+    dropout_hidden: [0.2, 0.3, 0.5]

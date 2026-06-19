@@ -33,7 +33,7 @@ def _require_cfg(training_config: dict[str, Any], key: str):
 def set_dropout_train_bn_eval(model: nn.Module) -> None:
     """Enable stochastic dropout while keeping BatchNorm statistics frozen.
 
-    Paper: Gal & Ghahramani, "Dropout as a Bayesian Approximation", ICML 2016 
+    Paper: Gal & Ghahramani, "Dropout as a Bayesian Approximation", ICML 2016
     MC dropout requires dropout to remain active at prediction time so each forward
     pass samples a different sub-network.
     """
@@ -97,12 +97,12 @@ class LightningSequenceRegressor(pl.LightningModule):
         self.ema_decay = float(training_config.get("ema_decay", mt_cfg.get("ema_decay", 0.999)))
         self.ema_decay_warmup = float(training_config.get("ema_decay_warmup", mt_cfg.get("ema_decay_warmup", 0.99)))
         self.teacher_warmup_epochs = int(training_config.get("teacher_warmup_epochs", mt_cfg.get("teacher_warmup_epochs", self.consistency_rampup_epochs)))
-        
+
         # Default 0.0: random zeroing of one-hot sequence positions is biologically
         # meaningless (test inputs never have missing positions).
         self.mt_input_dropout_p = float(training_config.get("mt_input_dropout_p", mt_cfg.get("input_dropout_p", 0.0)))
         self.mt_use_teacher_for_eval = bool(training_config.get("use_teacher_for_eval", mt_cfg.get("use_teacher_for_eval", True)))
-        
+
         # the consistency cost applies to both labelled and unlabelled examples,
         # only the classification cost is gated by labels.
         self.mt_consistency_on_source = bool(
@@ -278,7 +278,7 @@ class LightningSequenceRegressor(pl.LightningModule):
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         if self.use_fixmatch:
-            
+
             source_x, source_y = batch["source"]
             target_x = batch["target"]
             if isinstance(target_x, (tuple, list)):
@@ -332,7 +332,7 @@ class LightningSequenceRegressor(pl.LightningModule):
             target_x = batch["target"]
             if isinstance(target_x, (tuple, list)):
                 target_x = target_x[0]
-                
+
             source_pred = self.model(source_x)
             source_loss = self.loss_fn(source_pred, source_y)
 
@@ -397,7 +397,7 @@ class LightningSequenceRegressor(pl.LightningModule):
             pseudo_loss = self.mae_loss_fn(pseudo_pred, pseudo_y)
             lambda_pseudo = self._pseudo_lambda()
             loss = source_loss + lambda_pseudo * pseudo_loss
-            
+
             self.log("train_source_loss", source_loss, on_step=False, on_epoch=True, prog_bar=True)
             self.log("train_pseudo_mae_loss", pseudo_loss, on_step=False, on_epoch=True, prog_bar=True)
             self.log("train_lambda_pseudo", lambda_pseudo, on_step=False, on_epoch=True, prog_bar=True)
@@ -407,7 +407,7 @@ class LightningSequenceRegressor(pl.LightningModule):
 
         if not self.cmd_enabled:
             return self._shared_eval_step(batch, stage="train")
-        
+
         source_x, source_y = batch["source"]
         target_x = batch["target"]
         if isinstance(target_x, (tuple, list)):

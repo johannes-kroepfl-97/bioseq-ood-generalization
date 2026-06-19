@@ -40,13 +40,13 @@ class CMDLoss(nn.Module):
             )
         if source_z.shape[0] < 2 or target_z.shape[0] < 2:
             raise ValueError("CMDLoss needs at least two samples per domain batch.")
-       
-        
+
+
         # the paper notation is added as comments below
-        
+
         source_z = source_z.float()    # X (samples × features)
         target_z = target_z.float()    # Y (samples × features)
-        
+
         # mean computed per feature over the samples
         source_mean = source_z.mean(dim=0)    # E[X]
         target_mean = target_z.mean(dim=0)    # E[Y]
@@ -54,7 +54,7 @@ class CMDLoss(nn.Module):
         # first term with k=1, so  (1/|b-a|) · ||E(X) - E(Y)||_2
         # note the L_2 norm is torch.norm(... , p=2)
         loss = torch.norm(source_mean - target_mean, p=2) / self.interval_width
-        
+
         # for computations of central moment vectors
         source_centered = source_z - source_mean    # (X_j - E[X_j])
         target_centered = target_z - target_mean    # (Y_j - E[Y_j])
@@ -63,8 +63,8 @@ class CMDLoss(nn.Module):
         for k in range(2, self.n_moments + 1):
             source_moment = (source_centered ** k).mean(dim=0)    # c_k(X)_j = E[(X_j - E[X_j])^k]
             target_moment = (target_centered ** k).mean(dim=0)    # c_k(Y)_j = E[(Y_j - E[Y_j])^k]
-            
+
             # add ( 1 / (|b-a|^k)) * || c_k[X] - c_k[Y] ||_2
             loss += (1/self.interval_width ** k) * torch.norm(source_moment - target_moment, p=2)
-        
+
         return loss

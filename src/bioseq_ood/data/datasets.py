@@ -271,12 +271,12 @@ class SequenceDataModule:
 
     def _load_target_adaptation_arrays(self, *, keep_labels: bool = False) -> dict[str, Any]:
         """Load unlabeled target adaptation inputs from one or more split CSV/NPZ files.
-        
+
         For the normal training/adaptation path (``keep_labels=False``) labels are
         intentionally discarded, even if available in the CSV or cached NPZ, so the
         adaptation data is genuinely unlabeled. Test leakage is blocked unless
         ``allow_test_as_target=True``.
-        
+
         ``keep_labels=True`` is used ONLY for post-hoc MC-dropout quality diagnostics.
         """
         xs: list[np.ndarray] = []

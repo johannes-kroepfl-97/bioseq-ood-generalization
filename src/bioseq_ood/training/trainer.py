@@ -137,10 +137,10 @@ def _apply_adabn(model: torch.nn.Module, target_loader, device: torch.device | s
     was_training = model.training
     model.to(device)
     model.train()
-    
+
     # PyTorch with momentum=None, Without this, PyTorch uses EMA (momentum=0.1) which is biased toward the last
     # batches and carries the source running_mean as its initialisation.
-    
+
     saved_momenta: list[tuple[torch.nn.modules.batchnorm._BatchNorm, float | None]] = []
     for m in model.modules():
         if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
@@ -442,7 +442,7 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
     pretrained_ckpt_path = pseudo_cfg.get("pretrained_checkpoint")
     stage1_reused = False
     if pretrained_ckpt_path and Path(str(pretrained_ckpt_path)).exists():
-        
+
         try:
             state = torch.load(str(pretrained_ckpt_path), map_location="cpu")
             if isinstance(state, dict) and "state_dict" in state:
@@ -493,7 +493,7 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
         pin_memory=bool(training_cfg.get("pin_memory", True)),
         drop_last=False,
     )
-    
+
     pseudo_mean, pseudo_std = _predict_mc_dropout(
         pretrain_best_module.model,
         target_eval_loader,
@@ -506,7 +506,7 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
     n_target = int(uncertainty.numel())
     n_keep = max(1, int(np.ceil(n_target * keep_ratio)))
     selected_idx = torch.argsort(uncertainty)[:n_keep]
-    
+
     target_x = data_module.target_unlabeled_dataset.x.detach().cpu()
     selected_x = target_x[selected_idx]
     selected_y = pseudo_mean.detach().cpu()[selected_idx].view(-1, 1)
@@ -535,7 +535,7 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
         drop_last=(len(pseudo_dataset) % pseudo_batch_size == 1),
     )
 
-    
+
     final_model = build_model(model_name, config["model"], data_module.bundle.vocab_size, data_module.bundle.seq_len)
     if not pseudo_cfg["retrain_from_scratch"]:
         final_model.load_state_dict(pretrain_best_module.model.state_dict())
@@ -868,7 +868,7 @@ def train_single_run(config: dict[str, Any]) -> tuple[dict[str, Any], RunArtifac
         output_dir=eval_dir,
     )
 
-    
+
     selected_split = plan.selection_split
     selected_metric_name = "mae"
     selected_metric = float(overall_eval_metrics[selected_split][selected_metric_name])

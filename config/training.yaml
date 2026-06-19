@@ -1,0 +1,38 @@
+# Shared training configuration for every run, independent of model and method.
+# Edit a value here once and every (model, dataset, method, protocol) run picks
+# it up. Model architecture lives in models.yaml; method defaults in methods.yaml;
+# search winners are written to tuned/.
+#
+# Study-wide constants that are NOT knobs (selection.mode = val_id, setting,
+# the per-protocol adapt/test pools) are injected by pipeline_phases.py, not here.
+
+seed: 42
+
+output:
+  base_dir: results/training
+
+mlflow:
+  enabled: false   # experiment tracking is wired in the trainer but off by default
+
+training:
+  batch_size: 64
+  epochs: 200
+  learning_rate: 0.001
+  weight_decay: 0.0
+  loss: mse
+  early_stopping_patience: 20
+  lr_scheduler_factor: 0.5
+  lr_scheduler_patience: 5
+  accelerator: auto
+  devices: auto
+  deterministic: true
+  num_workers: 0
+  pin_memory: true
+
+# Architecture-independent hyperparameters swept by the Phase B encoder search.
+# Merged with each model's own search_space (models.yaml) at search time; never
+# part of a run config otherwise.
+search_space:
+  batch_size: [32, 64, 128]
+  learning_rate: [0.001, 0.0005, 0.0001]
+  weight_decay: [0.0, 0.0001, 0.001]

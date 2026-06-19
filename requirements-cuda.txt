@@ -1,0 +1,17 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Full setup from scratch:
+#
+#   conda create -n bioseq-ood python=3.11 -y && conda activate bioseq-ood
+#   pip install -r requirements-cuda.txt
+#   pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cu121
+#   python -m ipykernel install --user --name bioseq-ood --display-name "Python (bioseq-ood)"
+#
+# If torch ends up as CPU-only after the above, force-reinstall:
+#   pip uninstall torch -y
+#   pip install -r requirements-cuda.txt
+#
+# cu121 wheels exist up to torch 2.5.1 only. Versions >= 2.6.0 have no cu121 Windows wheel.
+# Using 2.5.1+cu121 — satisfies the project requirement of torch>=2.1.
+torch==2.5.1+cu121
+fsspec[http]<=2026.2.0  # torch 2.12.0 pulls fsspec 2026.4.0 which breaks datasets

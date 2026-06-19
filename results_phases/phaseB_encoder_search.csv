@@ -1,0 +1,4 @@
+dataset,model,val_id_mae_no_norm,val_id_mae_with_norm,chosen_normalization,best_val_id_mae,best_dir,best_dir_no_norm,best_dir_with_norm,status,error
+gfp,cnn,0.6391969585418701,0.6141570607423782,architecture_native_norm,0.6141570607423782,results\training\cnn\gfp\best_norm_runoff,results\training\cnn\gfp\best,results\training\cnn\gfp\best_norm_runoff,ok,
+gfp,mlp,0.2815478599667549,0.25817455917596815,architecture_native_norm,0.25817455917596815,results\training\mlp\gfp\best_norm_runoff,results\training\mlp\gfp\best,results\training\mlp\gfp\best_norm_runoff,ok,
+gfp,lstm,0.6340037168264389,0.6302194412946701,architecture_native_norm,0.6302194412946701,results\training\lstm\gfp\best_norm_runoff,results\training\lstm\gfp\best,results\training\lstm\gfp\best_norm_runoff,ok,

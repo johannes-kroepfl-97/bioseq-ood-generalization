@@ -1,0 +1,10 @@
+# Runtime dependencies. For development extras (pytest, ruff) and the optional
+# Optuna search backend, install the package with extras instead:
+#   pip install -e ".[dev,search]"
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0
+torch>=2.1
+lightning>=2.1
+mlflow>=2.9
+datasets>=2.16

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bioseq-ood"
+version = "0.1.0"
+description = "Evaluating domain-adaptation / SSL methods for out-of-distribution generalization on biological sequence-function data"
+requires-python = ">=3.10,<3.14"  # torch cu121 wheels stop at cp313 (Python 3.13)
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "torch>=2.1",
+    "lightning>=2.1",
+    "mlflow>=2.9",
+    "datasets>=2.16",
+    "fsspec[http]<=2026.2.0",  # newer fsspec (pulled by recent torch) breaks datasets; cap it
+]
+
+[project.optional-dependencies]
+search = ["optuna>=3.5"]
+dev    = ["pytest>=7.4", "ruff>=0.3", "ipykernel>=6.0", "matplotlib>=3.7"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export hubs intentionally import names they do not use locally.
+"__init__.py" = ["F401"]
+# Torch-gated test modules call importorskip before their imports.
+"tests/*" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# --- uv: pull torch from the CUDA 12.1 wheel index instead of the CPU-only default.
+# `explicit = true` means ONLY packages that name this index (torch) use it; everything
+# else resolves from PyPI. Run `uv sync --extra dev` to install; `uv lock` to pin.
+# Lock only for the platforms we run on (local Windows + Linux pod). The CUDA-only
+# torch index has no macOS wheels, so universal resolution would otherwise fail there.
+[tool.uv]
+environments = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }

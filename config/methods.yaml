@@ -1,0 +1,49 @@
+# Static per-method default hyperparameters. Each block is deep-merged under
+# cfg["training"] for missing keys only (committed/searched values always win).
+#
+# Only concrete defaults live here. The random-search *distributions* are sampling
+# logic and live in bioseq_ood/methods/hparams.py. AdaBN's normalization_strategy
+# is model-dependent and is also set in code. The Phase E winner per
+# (dataset, model, method) is written to tuned/methods.yaml.
+
+erm: {}
+adabn: {}
+
+# CMD = Central Moment Discrepancy (Zellinger et al., ICLR 2017). The CMD interval
+# [a, b] is not listed here: it is fixed at [0, 1] in code because every encoder
+# returns sigmoid-bounded features for CMD (models/*.py), so a/b follow from the
+# architecture rather than being tuned.
+cmd:
+  lambda_cmd: 0.1       # CMD regulariser weight lambda; searched in Phase E
+  cmd_n_moments: 5      # K = number of central moments matched (paper default 5)
+
+pseudo_labeling:
+  pseudo_labeling:
+    keep_ratio: 0.5
+    mc_passes: 20
+    lambda_pseudo_max: 0.3
+    rampup_epochs: 10
+    retrain_from_scratch: true
+
+mean_teacher:
+  mean_teacher:
+    ema_decay: 0.999
+    ema_decay_warmup: 0.99
+    lambda_consistency_max: 0.3
+    rampup_epochs: 10
+    input_dropout_p: 0.0
+    consistency_on_source: true
+    use_teacher_for_eval: true
+
+# FixMatch adapted for regression. mc_passes and keep_ratio mirror pseudo_labeling
+# (MC-dropout passes; fraction kept by the confidence gate). lambda is ramped with a
+# sigmoid, as in Mean Teacher: the paper's fixed weight relies on a confidence
+# threshold for an implicit curriculum, which the fixed-fraction gate here lacks.
+fixmatch:
+  fixmatch:
+    lambda_fixmatch_max: 0.3   # ramped (sigmoid) weight ceiling; searched in Phase E
+    rampup_epochs: 10          # epochs to ramp lambda from ~0 to its max
+    weak_noise_sigma: 0.0      # clean weak view -> highest-quality pseudo-target
+    strong_noise_sigma: 0.1    # perturbed strong view the consistency loss matches
+    mc_passes: 10              # T stochastic weak passes for the MC-dropout gate
+    keep_ratio: 0.5            # fraction of lowest-uncertainty targets kept (gate)

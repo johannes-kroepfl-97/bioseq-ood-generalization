@@ -1,0 +1,51 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# jupyter
+.ipynb_checkpoints/
+
+# os
+.DS_Store
+Thumbs.db
+
+# ide
+.vscode/
+.idea/
+
+# data and artifacts
+/data/
+reports/
+results/
+results_phases/          # raw search log; the committed decisions live in config/tuned/
+notebooks/
+notes.txt
+
+# old code
+src/ssl_for_ood/architectures_old/
+src/ssl_for_ood/training_old/
+
+# models and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.joblib
+*.pkl
+mlruns/
+wandb/
+
+# logs, scratch, backups, key files (not needed in the repo / not for the pod)
+*.log
+_paper_txt/
+_pretest_backup*/
+*.tar.gz
+id_ed25519*
+# reference PDFs — keep them local; comment these two out if you want them in git
+papers/
+methodology_paper/

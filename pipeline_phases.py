@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 import sys
 import traceback
 from copy import deepcopy
@@ -53,6 +54,14 @@ print("Results dir: ", RESULTS_DIR)
 # %% Knobs - the MODE switch flips every default atomically
 MODE   = "gfp_sanity" # "tutorial" | "smoke" | "gfp_sanity" | "real"
 RESUME = True         # if True, phases load their CSV instead of re-running when it already exists
+
+# CPU-bound knobs. These models are tiny, so the GPU is near-idle and the limiter is
+# CPU-side data loading + per-step overhead. Tune per box via env vars. On a multi-GPU
+# box running several shards, lower NUM_WORKERS so the shards do not oversubscribe the
+# cores. NUM_WORKERS defaults to 0 on Windows (spawn re-pickles the in-memory dataset).
+NUM_WORKERS   = int(os.environ.get("NUM_WORKERS", "0" if sys.platform == "win32" else "8"))
+TORCH_THREADS = int(os.environ.get("TORCH_THREADS", "4"))
+torch.set_num_threads(TORCH_THREADS)
 # STRICT_MODE defaults to True: a crashed run or a non-finite metric raises immediately
 # instead of being swallowed into a silent None row. Set it False per mode only if you
 # deliberately want a best-effort sweep (failures are then printed loudly and recorded
@@ -383,7 +392,7 @@ def run_protocol(
     cfg["training"]["method"]   = method
     cfg["training"]["epochs"]   = epochs
     cfg["training"]["early_stopping_patience"] = max(3, epochs // 5)
-    cfg["training"]["num_workers"] = 0
+    cfg["training"]["num_workers"] = NUM_WORKERS
     cfg["training"]["enable_progress_bar"] = False
 
     if DEBUG:
@@ -587,7 +596,7 @@ def phase_B() -> tuple[list[dict], dict[tuple[str, str], dict]]:
                 cfg["training"]["method"]                  = "erm"
                 cfg["training"]["epochs"]                  = EPOCHS
                 cfg["training"]["early_stopping_patience"] = max(3, EPOCHS // 5)
-                cfg["training"]["num_workers"]             = 0
+                cfg["training"]["num_workers"]             = NUM_WORKERS
                 cfg["training"]["enable_progress_bar"]     = False
                 if DEBUG:
                     cfg.setdefault("debug", {})

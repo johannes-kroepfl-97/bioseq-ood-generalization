@@ -15,7 +15,7 @@ mlflow:
   enabled: false   # experiment tracking is wired in the trainer but off by default
 
 training:
-  batch_size: 64
+  batch_size: 128   # larger batch -> fewer steps -> less per-step CPU overhead (the bottleneck)
   epochs: 200
   learning_rate: 0.001
   weight_decay: 0.0
@@ -33,6 +33,6 @@ training:
 # Merged with each model's own search_space (models.yaml) at search time; never
 # part of a run config otherwise.
 search_space:
-  batch_size: [32, 64, 128]
+  batch_size: [64, 128, 256]
   learning_rate: [0.001, 0.0005, 0.0001]
   weight_decay: [0.0, 0.0001, 0.001]

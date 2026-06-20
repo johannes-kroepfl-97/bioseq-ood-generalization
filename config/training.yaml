@@ -24,7 +24,7 @@ training:
   lr_scheduler_factor: 0.5
   lr_scheduler_patience: 5
   accelerator: auto
-  devices: auto
+  devices: 1        # one GPU per process; multi-GPU is done by running shards pinned via CUDA_VISIBLE_DEVICES, not DDP
   deterministic: true
   num_workers: 0
   pin_memory: true

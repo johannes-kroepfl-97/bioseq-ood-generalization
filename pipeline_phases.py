@@ -72,6 +72,12 @@ if TORCH_THREADS > 0:
 _SHARD_MODEL = os.environ.get("MODEL_SHARD")
 _SKIP_PREP   = os.environ.get("SKIP_PREP") == "1"
 _PREP_ONLY   = os.environ.get("PREP_ONLY") == "1"
+
+# Per-run training artifacts (checkpoints, per-epoch logs, predictions) are throwaway
+# except the Phase B baseline. On a pod, point this at fast LOCAL disk
+# (RUN_ARTIFACTS_DIR=/root/run_artifacts) instead of the slow network volume; only the
+# small results_phases/ CSVs need to persist. Defaults to the in-repo path (Windows-safe).
+ARTIFACTS_DIR = os.environ.get("RUN_ARTIFACTS_DIR", str(PROJECT_ROOT / "results" / "training"))
 # STRICT_MODE defaults to True: a crashed run or a non-finite metric raises immediately
 # instead of being swallowed into a silent None row. Set it False per mode only if you
 # deliberately want a best-effort sweep (failures are then printed loudly and recorded
@@ -183,6 +189,9 @@ class ProtocolResult:
     run_dir: str            # informational only; not consumed by the analysis layer
     error: str | None = None
     per_mut: list[dict] | None = None   # per-mutation-distance metrics for the report split
+    aux_mae: dict[str, float] | None = None   # MAE on every evaluated split (val_id/T_close/T_far),
+    #                                            so a search trial can be re-selected post-hoc on a
+    #                                            split other than the one it optimized (oracle analysis).
 
 
 def _read_per_mut_for_split(artifacts, split_name: str) -> list[dict]:
@@ -415,6 +424,8 @@ def run_protocol(
     cfg["training"]["early_stopping_patience"] = max(3, epochs // 5)
     cfg["training"]["num_workers"] = NUM_WORKERS
     cfg["training"]["enable_progress_bar"] = False
+    cfg.setdefault("output", {})["base_dir"] = ARTIFACTS_DIR
+    cfg["training"]["save_model_state_dict"] = False   # Phase C/E/F models are throwaway; only metrics are kept
 
     if DEBUG:
         cfg.setdefault("debug", {})
@@ -497,6 +508,11 @@ def run_protocol(
         run_dir=str(getattr(artifacts, "run_dir", "")),
         error=None,
         per_mut=_read_per_mut_for_split(artifacts, test_split_name),
+        aux_mae={
+            split: float(m["mae"])
+            for split in ("val_id", "T_close", "T_far")
+            if _finite((m := eval_metrics.get(split) or {}).get("mae"))
+        },
     )
 
 
@@ -626,6 +642,7 @@ def phase_B() -> tuple[list[dict], dict[tuple[str, str], dict]]:
                 cfg["training"]["early_stopping_patience"] = max(3, EPOCHS // 5)
                 cfg["training"]["num_workers"]             = NUM_WORKERS
                 cfg["training"]["enable_progress_bar"]     = False
+                cfg.setdefault("output", {})["base_dir"]   = ARTIFACTS_DIR
                 if DEBUG:
                     cfg.setdefault("debug", {})
                     cfg["debug"]["enabled"]               = True
@@ -731,6 +748,7 @@ def phase_C() -> list[dict]:
         return rows
 
     rows: list[dict] = []
+    per_mut_rows: list[dict] = []
     for (model, dataset), enc_cfg in ENCODER_CFGS.items():
         for seed in SEEDS:
             torch.cuda.empty_cache(); gc.collect()
@@ -752,9 +770,24 @@ def phase_C() -> list[dict]:
                 "val_id_mae":    r_close.val_id_mae,
                 "error_close":   r_close.error, "error_far": r_far.error,
             })
+            # Per-mutation-distance ERM, so the baseline can be overlaid on the per-distance
+            # method curves: the "close" band lines up with E1/E2 panels, "far" with E3/E4/E5.
+            # This is what lets us see whether a method dips below ERM at moderate distances.
+            for band, r in (("close", r_close), ("far", r_far)):
+                for pm in (r.per_mut or []):
+                    per_mut_rows.append({
+                        "dataset": dataset, "model": model, "method": "erm",
+                        "band": band, "seed": seed,
+                        "mut_dist":      pm.get("mut_dist"),
+                        "report_mae":    pm.get("mae"),
+                        "std_abs_error": pm.get("std_abs_error"),
+                        "n_samples":     pm.get("n_samples"),
+                    })
             print(f"  ERM_close = {r_close.report_mae}  ERM_far = {r_far.report_mae}")
 
     save_results(rows, "phaseC_baseline_reference.csv")
+    if per_mut_rows:
+        save_results(per_mut_rows, "phaseC_by_mut_dist.csv")
     banner("Phase C", f"{len(rows)} ERM baseline rows")
     return rows
 
@@ -824,6 +857,9 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
                         "trial": trial,
                         "val_id_mae":    res.val_id_mae,
                         "report_mae_E2": res.report_mae,
+                        # T_far is already evaluated on this same close-adapted model, so logging it
+                        # here is free and lets us oracle-select on the extrapolation band (E3) post-hoc.
+                        "report_mae_far": (res.aux_mae or {}).get("T_far"),
                         "hparams":       json.dumps(hparams),
                         "error":         res.error,
                     })

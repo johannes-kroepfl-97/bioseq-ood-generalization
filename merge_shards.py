@@ -22,6 +22,7 @@ SHARD_CSVS = [
     "phaseB_encoder_search.csv",
     "phaseB_all_trials.csv",
     "phaseC_baseline_reference.csv",
+    "phaseC_by_mut_dist.csv",
     "phaseD_top_models.csv",
     "phaseE_method_search.csv",
     "phaseF_all_protocols.csv",

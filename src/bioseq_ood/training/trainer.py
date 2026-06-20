@@ -271,6 +271,9 @@ def _make_trainer(
         monitor=monitor,
         mode="min",
         save_top_k=1,
+        # We only reload the best weights to evaluate; the optimizer/scheduler state is
+        # never resumed, so dropping it makes each checkpoint write ~3x smaller.
+        save_weights_only=True,
     )
     early_stopping = EarlyStopping(
         monitor=early_stop_monitor,
@@ -304,7 +307,8 @@ def _save_standard_outputs(
     run_contract: dict[str, Any],
 ) -> RunArtifacts:
     model_state_dict_path = run_dir / "model_state_dict.pt"
-    torch.save(best_model.state_dict(), model_state_dict_path)
+    if config.get("training", {}).get("save_model_state_dict", True):
+        torch.save(best_model.state_dict(), model_state_dict_path)
     metrics_path = save_json(run_dir / "metrics.json", metrics)
     config_path = save_yaml(run_dir / "config.yaml", config)
     run_contract_path = save_json(run_dir / "run_contract.json", run_contract)
@@ -961,10 +965,11 @@ def train_single_run(config: dict[str, Any]) -> tuple[dict[str, Any], RunArtifac
     metrics["train_losses"] = final_logged_losses
 
     model_state_dict_path = run_dir / "model_state_dict.pt"
-    torch.save(inference_model.state_dict(), model_state_dict_path)
-    if method.name == "mean_teacher" and best_module.teacher_model is not None:
-        torch.save(best_module.model.state_dict(), run_dir / "student_model_state_dict.pt")
-        torch.save(best_module.teacher_model.state_dict(), run_dir / "teacher_model_state_dict.pt")
+    if training_cfg.get("save_model_state_dict", True):
+        torch.save(inference_model.state_dict(), model_state_dict_path)
+        if method.name == "mean_teacher" and best_module.teacher_model is not None:
+            torch.save(best_module.model.state_dict(), run_dir / "student_model_state_dict.pt")
+            torch.save(best_module.teacher_model.state_dict(), run_dir / "teacher_model_state_dict.pt")
     metrics_path = save_json(run_dir / "metrics.json", metrics)
     config_path = save_yaml(run_dir / "config.yaml", config)
     run_contract_path = save_json(run_dir / "run_contract.json", run_contract)

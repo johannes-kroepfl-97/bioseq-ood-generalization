@@ -425,6 +425,8 @@ class SequenceDataModule:
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=drop_last,
+            # Keep workers alive across epochs (avoid the per-epoch respawn overhead).
+            persistent_workers=self.num_workers > 0,
         )
 
     def train_dataloader(self) -> DataLoader:

@@ -55,13 +55,23 @@ print("Results dir: ", RESULTS_DIR)
 MODE   = "gfp_sanity" # "tutorial" | "smoke" | "gfp_sanity" | "real"
 RESUME = True         # if True, phases load their CSV instead of re-running when it already exists
 
-# CPU-bound knobs. These models are tiny, so the GPU is near-idle and the limiter is
-# CPU-side data loading + per-step overhead. Tune per box via env vars. On a multi-GPU
-# box running several shards, lower NUM_WORKERS so the shards do not oversubscribe the
-# cores. NUM_WORKERS defaults to 0 on Windows (spawn re-pickles the in-memory dataset).
+# Throughput knobs (tune per box via env). The limiter is CPU-side data prep feeding
+# the GPU, so let torch use the cores: TORCH_THREADS=0 means "do not cap" (use all
+# cores). When running several shards on one box, set TORCH_THREADS to ~(vCPU / shards)
+# per shard so they do not oversubscribe. NUM_WORKERS=0 on Windows (spawn re-pickles
+# the in-memory dataset).
 NUM_WORKERS   = int(os.environ.get("NUM_WORKERS", "0" if sys.platform == "win32" else "8"))
-TORCH_THREADS = int(os.environ.get("TORCH_THREADS", "4"))
-torch.set_num_threads(TORCH_THREADS)
+TORCH_THREADS = int(os.environ.get("TORCH_THREADS", "0"))
+if TORCH_THREADS > 0:
+    torch.set_num_threads(TORCH_THREADS)
+
+# Multi-GPU is done by launching one process per model, each pinned to a GPU via
+# CUDA_VISIBLE_DEVICES (not DDP). MODEL_SHARD restricts this process to one model and
+# isolates its outputs (results_phases/<model>/ and config/tuned/<model>/). PREP_ONLY
+# runs data prep then exits (run once first); SKIP_PREP skips data prep in each shard.
+_SHARD_MODEL = os.environ.get("MODEL_SHARD")
+_SKIP_PREP   = os.environ.get("SKIP_PREP") == "1"
+_PREP_ONLY   = os.environ.get("PREP_ONLY") == "1"
 # STRICT_MODE defaults to True: a crashed run or a non-finite metric raises immediately
 # instead of being swallowed into a silent None row. Set it False per mode only if you
 # deliberately want a best-effort sweep (failures are then printed loudly and recorded
@@ -106,6 +116,17 @@ _DEFAULTS = {
     ),
 }
 globals().update(_DEFAULTS[MODE])
+
+# Shard override: run a single model in isolation so N processes (one per GPU) do not
+# clobber each other. TOP_K=1 keeps that one model through the method phases; outputs go
+# to per-model subdirectories. merge_shards.py recombines them afterwards.
+if _SHARD_MODEL:
+    MODELS = (_SHARD_MODEL,)
+    TOP_K = 1
+    RESULTS_DIR = RESULTS_DIR / _SHARD_MODEL
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    TUNED_DIR = TUNED_DIR / _SHARD_MODEL
+    print(f"MODEL_SHARD={_SHARD_MODEL}: outputs -> {RESULTS_DIR.relative_to(PROJECT_ROOT)} / {TUNED_DIR.relative_to(PROJECT_ROOT)}")
 
 # Module-level constants that don't vary by mode.
 METHODS            = ("erm", "cmd", "adabn", "pseudo_labeling", "mean_teacher", "fixmatch")
@@ -510,6 +531,10 @@ def phase_A():
       U_far,   T_far           (renamed copies of target_test, test)
       y_scaler.npz             (universal label scaler; unchanged)
     """
+    if _SKIP_PREP:
+        print("Phase A - skipped (SKIP_PREP=1); using data prepared by an earlier PREP_ONLY run")
+        banner("Phase A", f"skipped; assuming data ready for {DATASETS}")
+        return
     print("Phase A - data prep")
     load_all_data()
     preprocess_all_data(datasets=DATASETS, overwrite=False)
@@ -570,6 +595,9 @@ def phase_A():
 
 
 phase_A()
+if _PREP_ONLY:
+    print("PREP_ONLY=1: data is prepared; exiting before Phase B (now launch the per-model shards).")
+    sys.exit(0)
 
 
 # %% Phase B . Encoder search per (model, dataset)

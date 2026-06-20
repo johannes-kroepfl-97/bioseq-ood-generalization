@@ -23,7 +23,10 @@ Thumbs.db
 /data/
 reports/
 results/
-results_phases/          # raw search log; the committed decisions live in config/tuned/
+# Regenerated each run; kept out of git so a stale pull never makes RESUME pick up old
+# (e.g. debug) tuned encoders or search logs.
+results_phases/
+config/tuned/
 notebooks/
 notes.txt
 

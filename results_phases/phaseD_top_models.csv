@@ -1,4 +1,0 @@
-dataset,rank,model
-gfp,1,mlp
-gfp,2,cnn
-gfp,3,lstm

@@ -848,6 +848,10 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
         banner("Phase E", f"resumed {len(best)} (method, model, dataset) triples")
         return rows, best
 
+    # Fresh search: clear any stale CSV so the per-trial appends below start from a clean
+    # file. Each finished trial is flushed immediately (like Phase F), so phaseE_method_search.csv
+    # grows row-by-row and you can watch progress instead of waiting for the whole phase.
+    out_csv.unlink(missing_ok=True)
     rows: list[dict] = []
     best: dict[tuple[str, str, str], dict] = {}
     for dataset in DATASETS:
@@ -870,7 +874,7 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
                         pretrained_checkpoint=BASELINE_CKPTS.get((model, dataset)),
                         stage="search", protocol="E2",
                     )
-                    rows.append({
+                    row = {
                         "dataset": dataset, "model": model, "method": method,
                         "trial": trial,
                         "val_id_mae":    res.val_id_mae,
@@ -880,7 +884,9 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
                         "report_mae_far": (res.aux_mae or {}).get("T_far"),
                         "hparams":       json.dumps(hparams),
                         "error":         res.error,
-                    })
+                    }
+                    rows.append(row)
+                    append_result("phaseE_method_search.csv", row)   # incremental + flushed
                     print(f"  trial {trial}: val_id_mae = {res.val_id_mae}")
                     if res.val_id_mae is not None and (best_trial is None or res.val_id_mae < best_trial["val_id_mae"]):
                         best_trial = {"val_id_mae": res.val_id_mae, "hparams": hparams}
@@ -888,7 +894,8 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
                     best[(method, model, dataset)] = best_trial["hparams"]
                     print(f"  best val_id_mae = {best_trial['val_id_mae']}")
 
-    save_results(rows, "phaseE_method_search.csv")
+    # rows were flushed incrementally via append_result above -- no end-of-phase save_results.
+    print(f"  -> {(RESULTS_DIR / 'phaseE_method_search.csv').relative_to(PROJECT_ROOT)} ({len(rows)} trials)")
     _write_tuned(TUNED_METHODS_PATH, _TUNED_METHODS_HEADER, _best_hparams_to_nested(best))
     banner("Phase E", f"{len(best)} (method, model, dataset) triples tuned")
     return rows, best

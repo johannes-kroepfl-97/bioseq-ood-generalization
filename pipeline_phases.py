@@ -395,6 +395,8 @@ def run_protocol(
     epochs: int | None = None,
     run_name: str | None = None,
     pretrained_checkpoint: str | None = None,
+    stage: str = "final",
+    protocol: str | None = None,
 ) -> ProtocolResult:
     """One training + evaluation run with the given protocol parameters.
 
@@ -417,6 +419,16 @@ def run_protocol(
     cfg.setdefault("training", {})
     cfg.setdefault("evaluation", {})
     _apply_study_constants(cfg)
+
+    # Provenance the trainer copies verbatim into run_record.json (it does not know the
+    # protocol naming itself). stage drives the always-on per-epoch CSV logger for finals.
+    cfg["stage"] = stage
+    cfg["provenance"] = {
+        "protocol": protocol,
+        "adapt_pool": adapt_pool,
+        "test_pool": test_pool,
+        "seed": seed,
+    }
 
     cfg["seed"] = seed
     cfg["training"]["method"]   = method
@@ -643,6 +655,7 @@ def phase_B() -> tuple[list[dict], dict[tuple[str, str], dict]]:
                 cfg["training"]["num_workers"]             = NUM_WORKERS
                 cfg["training"]["enable_progress_bar"]     = False
                 cfg.setdefault("output", {})["base_dir"]   = ARTIFACTS_DIR
+                cfg["stage"] = "search"   # propagates to every search trial via run_random_search
                 if DEBUG:
                     cfg.setdefault("debug", {})
                     cfg["debug"]["enabled"]               = True
@@ -677,6 +690,8 @@ def phase_B() -> tuple[list[dict], dict[tuple[str, str], dict]]:
                 norm_cfg = deepcopy(best_cfg)
                 norm_cfg.setdefault("model", {})["normalization_strategy"] = "architecture_native_norm"
                 norm_cfg.setdefault("output", {})["run_name"] = "best_norm_runoff"
+                norm_cfg["stage"] = "search"
+                norm_cfg["provenance"] = {"protocol": "encoder_search"}
                 norm_metrics, norm_artifacts = run_single_experiment(config=norm_cfg)
                 norm_val_id = (norm_metrics.get("evaluation", {}).get("val_id") or {}).get("mae")
                 use_norm = norm_val_id is not None and float(norm_val_id) < base_val_id
@@ -757,11 +772,13 @@ def phase_C() -> list[dict]:
                 method="erm", model=model, dataset=dataset,
                 encoder_cfg=enc_cfg, hparams={}, seed=seed,
                 adapt_pool="U_close", test_pool="T_close",
+                stage="final", protocol="ERM_close",
             )
             r_far = run_protocol(
                 method="erm", model=model, dataset=dataset,
                 encoder_cfg=enc_cfg, hparams={}, seed=seed,
                 adapt_pool="U_far",   test_pool="T_far",
+                stage="final", protocol="ERM_far",
             )
             rows.append({
                 "dataset": dataset, "model": model, "seed": seed,
@@ -851,6 +868,7 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
                         encoder_cfg=enc_cfg, hparams=hparams, seed=SEARCH_SEED,
                         adapt_pool="U_close", test_pool="T_close",   # <- E2
                         pretrained_checkpoint=BASELINE_CKPTS.get((model, dataset)),
+                        stage="search", protocol="E2",
                     )
                     rows.append({
                         "dataset": dataset, "model": model, "method": method,
@@ -877,6 +895,34 @@ def phase_E() -> tuple[list[dict], dict[tuple[str, str, str], dict]]:
 
 
 phaseE_rows, BEST_HPARAMS = phase_E()
+
+
+# %% Optional diagnostic: one logged training run, then exit (does NOT touch Phase F).
+# Re-runs a single (method, model, protocol) with its tuned hparams and LOG_EPOCHS=1 so the
+# per-epoch metrics (val_id_mae, train_lambda_consistency, *_consistency_loss, ...) land in
+# <run_dir>/csv_logs/.../metrics.csv -- enough to see whether val_id rises once the rampup
+# saturates (the early-stopping-rolls-back-to-ERM signature). On a resumed pod, Phases B-E
+# load from disk, so this reaches the run quickly.
+#   DIAGNOSE_METHOD=mean_teacher LOG_EPOCHS=1 [DIAGNOSE_MODEL=mlp] [DIAGNOSE_PROTOCOL=E4]
+_DIAG_METHOD = os.environ.get("DIAGNOSE_METHOD")
+if _DIAG_METHOD:
+    _dmodel = os.environ.get("DIAGNOSE_MODEL", MODELS[0])
+    _dproto = os.environ.get("DIAGNOSE_PROTOCOL", "E4")
+    _dataset = DATASETS[0]
+    _adapt, _test = PROTOCOLS[_dproto]
+    _enc = ENCODER_CFGS.get((_dmodel, _dataset))
+    _hp = BEST_HPARAMS.get((_DIAG_METHOD, _dmodel, _dataset), {})
+    print(f"DIAGNOSE: {_DIAG_METHOD} / {_dmodel} / {_dproto} (adapt={_adapt}, test={_test}) "
+          f"with LOG_EPOCHS={os.environ.get('LOG_EPOCHS')} -- single run, then exit")
+    _dres = run_protocol(
+        method=_DIAG_METHOD, model=_dmodel, dataset=_dataset,
+        encoder_cfg=_enc, hparams=_hp, seed=SEEDS[0],
+        adapt_pool=_adapt, test_pool=_test,
+        pretrained_checkpoint=BASELINE_CKPTS.get((_dmodel, _dataset)),
+    )
+    print(f"DIAGNOSE done. report_mae={_dres.report_mae} val_id_mae={_dres.val_id_mae}")
+    print(f"  per-epoch metrics.csv under: {_dres.run_dir}/csv_logs/")
+    sys.exit(0)
 
 
 # %% Phase F . Run all five protocols with the committed hparams
@@ -919,6 +965,7 @@ def phase_F() -> tuple[list[dict], list[dict]]:
                             encoder_cfg=enc_cfg, hparams=hparams, seed=seed,
                             adapt_pool=adapt, test_pool=test,
                             pretrained_checkpoint=BASELINE_CKPTS.get((model, dataset)),
+                            stage="final", protocol=protocol_name,
                         )
                         row = {
                             "dataset": dataset, "model": model, "method": method,
@@ -1007,6 +1054,28 @@ def phase_G() -> pd.DataFrame:
             continue
         print(f"\n  {ds}")
         print(sub.groupby("method")[headline_cols].mean().round(4).to_string())
+
+    # Auto-generate the collected/ tables from the per-run run_record.json files, so the
+    # inspectable all_runs / per-epoch / per-mut-dist + aggregated/method_lift summaries
+    # are never forgotten after a run. Walks the artifacts tree (this shard's model when
+    # sharded, to avoid concurrent writers) and is non-fatal: a post-processing hiccup
+    # must not discard the experiment, whose phase CSVs and run records are already on disk.
+    try:
+        import collect as _collect
+        import aggregate as _aggregate
+
+        if _SHARD_MODEL:
+            art_root = Path(ARTIFACTS_DIR) / _SHARD_MODEL
+            collected_dir = RESULTS_DIR / "collected"
+        else:
+            art_root = Path(ARTIFACTS_DIR)
+            collected_dir = PROJECT_ROOT / "collected"
+        _collect.collect(art_root, collected_dir)
+        _aggregate.run(collected_dir / "all_runs.csv", collected_dir, verbose=False)
+        print(f"  -> auto-collected run records into {collected_dir.relative_to(PROJECT_ROOT)}")
+    except Exception as exc:
+        print(f"[WARN] auto-collect failed (run records on disk are unaffected; "
+              f"run collect.py + aggregate.py by hand): {exc!r}")
 
     banner("Phase G", f"Analysis written for {len(merged)} (dataset, model, method) cells")
     return merged

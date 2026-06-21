@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,11 +17,11 @@ from torch.utils.data import DataLoader, TensorDataset
 try:
     import lightning.pytorch as pl
     from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-    from lightning.pytorch.loggers import MLFlowLogger
+    from lightning.pytorch.loggers import CSVLogger, MLFlowLogger
 except ImportError:  # pragma: no cover
     import pytorch_lightning as pl
     from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-    from pytorch_lightning.loggers import MLFlowLogger
+    from pytorch_lightning.loggers import CSVLogger, MLFlowLogger
 
 import yaml
 
@@ -115,6 +116,128 @@ def save_yaml(path: str | Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _git_sha() -> str | None:
+    """Short commit hash of the working tree (for run provenance), or None.
+
+    Lets every run record which code produced it -- the thing that caused the
+    old-vs-new-code confusion. Falls back to the GIT_SHA env var when git is not
+    available (e.g. a shallow copy on the pod)."""
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        sha = out.stdout.strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
+    return os.environ.get("GIT_SHA")
+
+
+def _safe_len(ds: Any) -> int | None:
+    try:
+        return int(len(ds)) if ds is not None else None
+    except Exception:
+        return None
+
+
+def _write_run_record(
+    *,
+    run_dir: Path,
+    config: dict[str, Any],
+    metrics: dict[str, Any],
+    data_module: SequenceDataModule,
+    stage: str,
+    epochs_run: int,
+    max_epochs: int,
+    stopped_early: bool,
+) -> Path:
+    """Write the canonical, self-contained per-run record (run_record.json).
+
+    This is the single source of truth that collect.py walks to build all_runs.csv.
+    Everything here is derived from the already-built ``metrics`` dict plus a little
+    provenance, so it stays in lock-step with metrics.json. ``config["provenance"]``
+    (set by the pipeline: protocol / adapt_pool / test_pool / trial) is copied through
+    verbatim; the trainer does not know the protocol naming itself.
+    """
+    training_cfg = config.get("training", {}) or {}
+    prov = config.get("provenance", {}) if isinstance(config.get("provenance"), dict) else {}
+    method_name = (metrics.get("method", {}) or {}).get("name") or training_cfg.get("method", "erm")
+    seed = metrics.get("seed")
+    eval_metrics = metrics.get("evaluation", {}) or {}
+
+    # adapt pool: explicit provenance, else inferred from the unlabeled target file(s).
+    adapt_pool = prov.get("adapt_pool")
+    if adapt_pool is None:
+        target_files = training_cfg.get("target_split_files") or []
+        if target_files:
+            adapt_pool = Path(str(target_files[0])).stem
+
+    method_hparams = metrics.get(method_name) if isinstance(metrics.get(method_name), dict) else {}
+    protocol = prov.get("protocol")
+    run_name = Path(run_dir).name
+    run_id = "__".join(
+        str(x) for x in [metrics.get("dataset"), metrics.get("model_name"),
+                         method_name, protocol or "na", f"seed{seed}", run_name]
+    )
+
+    record = {
+        # --- identity / provenance ---
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "stage": stage,                          # "search" | "final" | "unknown"
+        "git_sha": _git_sha(),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        # --- experiment keys ---
+        "dataset": metrics.get("dataset"),
+        "model": metrics.get("model_name"),
+        "method": method_name,
+        "protocol": protocol,
+        "adapt_pool": adapt_pool,
+        "test_pool": prov.get("test_pool"),
+        "seed": seed,
+        "trial": prov.get("trial"),
+        # --- config / data shape ---
+        "normalization_strategy": metrics.get("normalization_strategy"),
+        "input_encoding": metrics.get("input_encoding"),
+        "seq_len": metrics.get("seq_len"),
+        "vocab_size": metrics.get("vocab_size"),
+        "n_train": _safe_len(getattr(data_module, "train_dataset", None)),
+        "n_val_id": _safe_len(getattr(data_module, "val_id_dataset", None)),
+        "n_adapt": _safe_len(getattr(data_module, "target_unlabeled_dataset", None)),
+        "training_cfg": training_cfg,
+        "model_cfg": config.get("model", {}),
+        "method_meta": metrics.get("method", {}),
+        "method_hparams": method_hparams,
+        "selection": metrics.get("selection", {}),
+        # --- training dynamics (scalars) ---
+        "best_epoch": metrics.get("best_epoch"),
+        "epochs_run": epochs_run,
+        "max_epochs": max_epochs,
+        "stopped_early": stopped_early,
+        "training_dynamics": metrics.get("train_losses", {}),
+        # --- outcomes (per evaluated split: mae/rmse/spearman/r2/naive_mae/n_samples/...) ---
+        "metrics": eval_metrics,
+        "selected_split": metrics.get("selected_split"),
+        "selected_metric": metrics.get("selected_metric"),
+        "report_split": (metrics.get("selection", {}) or {}).get("report_split"),
+        "report_metric": metrics.get("report_metric"),
+        # --- status / pointers ---
+        "status": "ok",
+        "error": None,
+        "paths": {
+            "metrics_json": str(Path(run_dir) / "metrics.json"),
+            "config_yaml": str(Path(run_dir) / "config.yaml"),
+            "predictions_csv": str(Path(run_dir) / "evaluation" / "predictions.csv"),
+            "per_mut_dist_csv": str(Path(run_dir) / "evaluation" / "evaluation_metrics_by_mut_dist.csv"),
+        },
+    }
+    return save_json(Path(run_dir) / "run_record.json", record)
+
+
 def _safe_split_metric(overall_eval_metrics: dict[str, Any], split: str, metric_name: str) -> float | None:
     split_metrics = overall_eval_metrics.get(split)
     if not isinstance(split_metrics, dict) or metric_name not in split_metrics:
@@ -200,10 +323,13 @@ def _build_run_contract(
     }
 
 
-def _get_pseudo_cfg(training_cfg: dict[str, Any]) -> dict[str, Any]:
+def _get_pseudo_cfg(training_cfg: dict[str, Any], run_seed: int = 42) -> dict[str, Any]:
     raw = training_cfg.get("pseudo_labeling", {})
     pseudo_cfg = raw if isinstance(raw, dict) else {}
-    seed_default = int(training_cfg.get("seed", 42))
+    # The run seed lives at config["seed"], not training_cfg, so it must be passed in.
+    # Deriving mc_seed from it makes the MC-dropout pseudo-label draw differ per seed
+    # instead of defaulting to a constant (which made every seed bit-identical).
+    seed_default = int(training_cfg.get("seed", run_seed))
     return {
         "keep_ratio": float(training_cfg.get("keep_ratio", pseudo_cfg.get("keep_ratio", 0.5))),
         "mc_passes": int(training_cfg.get("mc_passes", pseudo_cfg.get("mc_passes", 20))),
@@ -280,12 +406,24 @@ def _make_trainer(
         mode="min",
         patience=int(training_cfg.get("early_stopping_patience", 20)),
     )
+    # Always persist the per-epoch metrics the LightningModule logs (val_id_mae,
+    # train_loss, train_lambda_consistency/_fixmatch, *_consistency_loss, ...) to
+    # <run_dir>/csv_logs/.../metrics.csv. Every run -- search trials included -- needs an
+    # inspectable training curve; it is most important precisely when a method
+    # underperforms (did it diverge, never ramp up, early-stop too soon?). The CSV is a
+    # few KB per run, so this is cheap. When MLflow is enabled it logs in parallel.
+    csv_logger = CSVLogger(save_dir=str(run_dir), name="csv_logs")
+    if isinstance(mlflow_logger, NullMlflowLogger):
+        run_logger = csv_logger
+    else:
+        run_logger = [mlflow_logger, csv_logger]
+
     trainer = pl.Trainer(
         accelerator=training_cfg.get("accelerator", "auto"),
         devices=training_cfg.get("devices", "auto"),
         max_epochs=int(training_cfg.get("epochs", 100)),
         log_every_n_steps=int(training_cfg.get("log_every_n_steps", 10)),
-        logger=None if isinstance(mlflow_logger, NullMlflowLogger) else mlflow_logger,
+        logger=run_logger,
         callbacks=[checkpoint_callback, early_stopping],
         deterministic=bool(training_cfg.get("deterministic", True)),
         enable_progress_bar=bool(training_cfg.get("enable_progress_bar", True)),
@@ -361,7 +499,9 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
 
     plan = plan_from_config(config)
 
-    pseudo_cfg = _get_pseudo_cfg(training_cfg)
+    seed = int(config.get("seed", 42))
+    stage = str(config.get("stage", "unknown"))
+    pseudo_cfg = _get_pseudo_cfg(training_cfg, run_seed=seed)
     keep_ratio = pseudo_cfg["keep_ratio"]
     if not (0.0 < keep_ratio <= 1.0):
         raise ValueError("Pseudo-label keep_ratio must be in (0, 1].")
@@ -374,7 +514,6 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
     eval_dir = ensure_dir(run_dir / "evaluation")
     pseudo_dir = ensure_dir(run_dir / "pseudo_labels")
 
-    seed = int(config.get("seed", 42))
     set_seed(seed)
 
     data_module = SequenceDataModule(
@@ -540,6 +679,11 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
     )
 
 
+    # _predict_mc_dropout reset the global RNG to the (fixed) mc_seed, and Stage 1 is a
+    # reused checkpoint, so without re-seeding here the Stage-2 weight init, data shuffling
+    # and dropout would be identical across run seeds. Re-seed so two seeds are genuinely
+    # different runs.
+    set_seed(seed)
     final_model = build_model(model_name, config["model"], data_module.bundle.vocab_size, data_module.bundle.seq_len)
     if not pseudo_cfg["retrain_from_scratch"]:
         final_model.load_state_dict(pretrain_best_module.model.state_dict())
@@ -557,7 +701,7 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
         y_scaler=data_module.bundle.y_scaler,
         val_stage_names=val_stage_names,
     )
-    final_trainer, final_checkpoint, _ = _make_trainer(
+    final_trainer, final_checkpoint, final_es = _make_trainer(
         training_cfg=final_cfg,
         run_dir=run_dir,
         checkpoints_dir=final_ckpt_dir,
@@ -687,6 +831,14 @@ def _train_pseudo_labeling_run(config: dict[str, Any], method) -> tuple[dict[str
         best_ckpt_path=final_best_ckpt,
         run_contract=run_contract,
     )
+
+    max_epochs = int(final_cfg.get("epochs", training_cfg.get("epochs", 100)))
+    epochs_run = int(getattr(final_trainer, "current_epoch", 0))
+    stopped_early = bool(getattr(final_es, "stopped_epoch", 0)) or epochs_run < max_epochs
+    _write_run_record(
+        run_dir=run_dir, config=config, metrics=metrics, data_module=data_module,
+        stage=stage, epochs_run=epochs_run, max_epochs=max_epochs, stopped_early=stopped_early,
+    )
     return metrics, artifacts
 
 
@@ -695,6 +847,7 @@ def train_single_run(config: dict[str, Any]) -> tuple[dict[str, Any], RunArtifac
     model_name = str(config.get("model_name", "cnn"))
     dataset_name = str(config["dataset"]["name"])
     training_cfg = config["training"]
+    stage = str(config.get("stage", "unknown"))
     plan = plan_from_config(config)
     if "target_split_files" not in training_cfg:
         training_cfg["target_split_files"] = ["target_close.csv"]
@@ -809,7 +962,7 @@ def train_single_run(config: dict[str, Any]) -> tuple[dict[str, Any], RunArtifac
         mlflow_logger.log_hyperparams(flatten_dict(config))
         mlflow_logger.log_hyperparams(flatten_dict({"run_contract": run_contract, "method": method_meta}))
 
-    trainer, checkpoint_callback, _ = _make_trainer(
+    trainer, checkpoint_callback, early_stopping = _make_trainer(
         training_cfg=training_cfg,
         run_dir=run_dir,
         checkpoints_dir=checkpoints_dir,
@@ -1017,6 +1170,14 @@ def train_single_run(config: dict[str, Any]) -> tuple[dict[str, Any], RunArtifac
             eval_artifacts.metrics_path,
             eval_artifacts.per_mut_dist_metrics_path,
         ],
+    )
+
+    max_epochs = int(training_cfg.get("epochs", 100))
+    epochs_run = int(getattr(trainer, "current_epoch", 0))
+    stopped_early = bool(getattr(early_stopping, "stopped_epoch", 0)) or epochs_run < max_epochs
+    _write_run_record(
+        run_dir=run_dir, config=config, metrics=metrics, data_module=data_module,
+        stage=stage, epochs_run=epochs_run, max_epochs=max_epochs, stopped_early=stopped_early,
     )
 
     artifacts = RunArtifacts(

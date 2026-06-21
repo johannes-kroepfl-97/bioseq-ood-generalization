@@ -55,6 +55,10 @@ def run_random_search(base_config: dict[str, Any], search_space: dict[str, Any],
         trial_config = deep_update(deepcopy(base_config), sampled_override)
         trial_config.setdefault("output", {})["run_name"] = f"trial_{trial_idx:03d}"
         trial_config.setdefault("mlflow", {})["run_name"] = f"{model_name}__{dataset_name}__trial_{trial_idx:03d}"
+        # Provenance for run_record.json: these are encoder-search trials. stage is
+        # inherited from base_config (set to "search" by phase_B).
+        trial_config["stage"] = trial_config.get("stage", "search")
+        trial_config["provenance"] = {"protocol": "encoder_search", "trial": trial_idx}
         metrics, artifacts = train_single_run(trial_config)
         result = {
             "trial": trial_idx,

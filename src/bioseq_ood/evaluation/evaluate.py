@@ -7,6 +7,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import torch
+from scipy.stats import pearsonr, spearmanr
 from torch.utils.data import DataLoader
 
 from bioseq_ood.data.datasets import SequenceRegressionDataset
@@ -30,6 +31,21 @@ def _inverse_scale_tensor(
     return values * std + mean
 
 
+def _safe_corr(fn, a: np.ndarray, b: np.ndarray) -> float:
+    """Correlation that returns NaN instead of raising on degenerate inputs.
+
+    ``spearmanr``/``pearsonr`` are undefined (and warn/raise) when there are fewer
+    than two points or when either input is constant -- which is exactly the
+    "model collapsed to a constant" case we want to flag rather than crash on.
+    """
+    if a.shape[0] < 2 or np.ptp(a) == 0 or np.ptp(b) == 0:
+        return float("nan")
+    try:
+        return float(fn(a, b)[0])
+    except Exception:
+        return float("nan")
+
+
 def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float | int]:
     y_true = np.asarray(y_true, dtype=np.float64).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=np.float64).reshape(-1)
@@ -39,17 +55,28 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, flo
             "mse": float("nan"),
             "rmse": float("nan"),
             "std_abs_error": float("nan"),
+            "spearman": float("nan"),
+            "pearson": float("nan"),
+            "r2": float("nan"),
+            "naive_mae": float("nan"),
             "n_samples": 0,
         }
 
     err = y_pred - y_true
     abs_err = np.abs(err)
     mse = float(np.mean(err ** 2))
+    # naive_mae = MAE of the best constant predictor (the split mean). A model whose
+    # mae approaches this has collapsed to predicting the mean; r2 < 0 says the same.
+    ss_tot = float(np.sum((y_true - y_true.mean()) ** 2))
     return {
         "mae": float(np.mean(abs_err)),
         "mse": mse,
         "rmse": float(np.sqrt(mse)),
         "std_abs_error": float(np.std(abs_err)),
+        "spearman": _safe_corr(spearmanr, y_true, y_pred),
+        "pearson": _safe_corr(pearsonr, y_true, y_pred),
+        "r2": float(1.0 - float(np.sum(err ** 2)) / ss_tot) if ss_tot > 0 else float("nan"),
+        "naive_mae": float(np.mean(np.abs(y_true - y_true.mean()))),
         "n_samples": int(y_true.shape[0]),
     }
 

@@ -676,8 +676,11 @@ def load_tfbind8_data():
     if seq_len != 8:
         raise ValueError(f"Expected TFBind8 sequence length 8, got seq_len={seq_len}")
 
-    np.random.seed(42)
-    anchor_idx = int(np.random.choice(len(sequences)))
+    # Fixed anchor for mutation-distance: the core must be identical across run seeds,
+    # so use a local RandomState seeded with a constant rather than reseeding the global
+    # NumPy RNG (which would clobber global state mid-run as a side effect). RandomState
+    # (not default_rng) so the chosen anchor index is byte-for-byte the same as before.
+    anchor_idx = int(np.random.RandomState(42).choice(len(sequences)))
     core = sequences[anchor_idx]
 
     df = pd.DataFrame({

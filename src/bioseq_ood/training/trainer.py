@@ -178,6 +178,20 @@ def _write_run_record(
 
     method_hparams = metrics.get(method_name) if isinstance(metrics.get(method_name), dict) else {}
     protocol = prov.get("protocol")
+
+    # report_metric must reflect the PROTOCOL's test pool (T_close for E1/E2, T_far for
+    # E3/E4/E5), NOT the trainer's default report_split ("test"), which the protocol
+    # pipeline does not use -- evaluating on "test" for every protocol made E1/E2 report
+    # the far-band number and made E2 == E3. Fall back to the trainer value only for
+    # non-protocol runs (e.g. encoder search), where no test_pool is recorded.
+    test_pool = prov.get("test_pool")
+    if test_pool and isinstance(eval_metrics.get(test_pool), dict):
+        report_split = test_pool
+        report_metric = eval_metrics[test_pool].get("mae")
+    else:
+        report_split = (metrics.get("selection", {}) or {}).get("report_split")
+        report_metric = metrics.get("report_metric")
+
     run_name = Path(run_dir).name
     run_id = "__".join(
         str(x) for x in [metrics.get("dataset"), metrics.get("model_name"),
@@ -223,8 +237,8 @@ def _write_run_record(
         "metrics": eval_metrics,
         "selected_split": metrics.get("selected_split"),
         "selected_metric": metrics.get("selected_metric"),
-        "report_split": (metrics.get("selection", {}) or {}).get("report_split"),
-        "report_metric": metrics.get("report_metric"),
+        "report_split": report_split,
+        "report_metric": report_metric,
         # --- status / pointers ---
         "status": "ok",
         "error": None,
@@ -375,8 +389,24 @@ def _predict_mc_dropout(
 
 
 def _build_validation(data_module: SequenceDataModule) -> tuple[list[Any], list[str]]:
-    """Validation dataloaders + stage names. Selection always monitors val_id."""
-    return [data_module.val_id_dataloader(), data_module.val_ood_dataloader()], ["val_id", "val_ood"]
+    """Validation dataloaders + stage names. Selection always monitors val_id (index 0).
+
+    val_id drives checkpoint/early-stopping and is evaluated every epoch. T_close and
+    T_far are added as logged-only OOD diagnostics so the in-distribution -> close ->
+    far generalization gap can be read off the training curve; the LightningModule
+    evaluates them only every diag_every_n epochs. They are included only when the
+    paper-notation splits are materialized (protocol runs). val_ood is intentionally
+    dropped: it was a noisy md-4 subset of T_close, redundant as a diagnostic and never
+    used for selection.
+    """
+    loaders: list[Any] = [data_module.val_id_dataloader()]
+    names: list[str] = ["val_id"]
+    for split in ("T_close", "T_far"):
+        artifact = data_module.get_split_artifact(split)
+        if artifact is not None and artifact.get("y") is not None:
+            loaders.append(data_module.labeled_dataloader(split, shuffle=False))
+            names.append(split)
+    return loaders, names
 
 
 def _make_trainer(

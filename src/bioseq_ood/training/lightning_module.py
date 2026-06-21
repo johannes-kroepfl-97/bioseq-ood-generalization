@@ -56,9 +56,11 @@ class LightningSequenceRegressor(pl.LightningModule):
         super().__init__()
         self.model = model
         self.training_config = training_config
-        # Defaults to [val_id, val_ood]; an "oracle" entry is appended when oracle
-        # model selection is active. Early stopping always tracks val_id.
-        self.val_stage_names = list(val_stage_names) if val_stage_names else ["val_id", "val_ood"]
+        # val_stage_names[0] is the selection split (val_id): evaluated every epoch and
+        # tracked by early stopping / checkpointing. Any further entries (e.g. T_close,
+        # T_far) are logged-only OOD diagnostics, evaluated only every diag_every_n epochs.
+        self.val_stage_names = list(val_stage_names) if val_stage_names else ["val_id"]
+        self.diag_every_n = max(1, int(training_config.get("diag_every_n_epochs", 5)))
         self.loss_name = str(training_config.get("loss", "mse")).lower()
         self.loss_fn = nn.MSELoss() if self.loss_name == "mse" else nn.L1Loss()
         self.y_scaler = y_scaler
@@ -428,7 +430,13 @@ class LightningSequenceRegressor(pl.LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False)
         return loss
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor:
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> torch.Tensor | None:
+        # dataloader_idx 0 is the selection split (val_id): always evaluated, so early
+        # stopping / checkpointing have a value every epoch. The extra OOD diagnostics
+        # (T_close/T_far, idx >= 1) are skipped except every diag_every_n epochs -- this
+        # avoids their forward passes on the other epochs while still giving a curve.
+        if dataloader_idx != 0 and (self.current_epoch % self.diag_every_n) != 0:
+            return None
         if dataloader_idx < len(self.val_stage_names):
             stage = self.val_stage_names[dataloader_idx]
         else:

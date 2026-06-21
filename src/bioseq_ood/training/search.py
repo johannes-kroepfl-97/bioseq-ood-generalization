@@ -22,15 +22,20 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def sample_from_space(space: dict[str, Any]) -> dict[str, Any]:
+def sample_from_space(space: dict[str, Any], rng: random.Random | None = None) -> dict[str, Any]:
+    # rng MUST be a private random.Random, not the global `random` module: train_single_run
+    # calls set_seed() every trial, which reseeds the global module -- so sampling from it
+    # makes every trial after the first draw identical hyperparameters. A passed-in instance
+    # is immune to that reseed. (None falls back to the global module for ad-hoc callers.)
+    choose = (rng or random).choice
     sampled: dict[str, Any] = {}
     for key, value in space.items():
         if isinstance(value, dict):
-            sampled[key] = sample_from_space(value)
+            sampled[key] = sample_from_space(value, rng)
         elif isinstance(value, list):
             if not value:
                 raise ValueError(f"Search space list for key '{key}' is empty.")
-            sampled[key] = random.choice(value)
+            sampled[key] = choose(value)
         else:
             sampled[key] = value
     return sampled
@@ -50,8 +55,13 @@ def run_random_search(base_config: dict[str, Any], search_space: dict[str, Any],
     model_name = str(base_config.get("model_name", "cnn"))
     dataset_name = str(base_config["dataset"]["name"])
 
+    # Private sampler RNG, seeded per (model, dataset) for reproducibility and so different
+    # encoders explore different trial sequences. Persisting one instance across the loop is
+    # what makes the 20 trials distinct -- see the note in sample_from_space.
+    search_rng = random.Random(abs(hash((model_name, dataset_name, int(base_config.get("seed", 42))))) % (2**32))
+
     for trial_idx in range(n_trials):
-        sampled_override = sample_from_space(search_space)
+        sampled_override = sample_from_space(search_space, search_rng)
         trial_config = deep_update(deepcopy(base_config), sampled_override)
         trial_config.setdefault("output", {})["run_name"] = f"trial_{trial_idx:03d}"
         trial_config.setdefault("mlflow", {})["run_name"] = f"{model_name}__{dataset_name}__trial_{trial_idx:03d}"
